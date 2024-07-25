@@ -19,12 +19,15 @@ import configparser # for config/ini file
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
 from vedbus import VeDbusService
 
+# Reads both channels of the Shelly EM and updates the configured dbus service
 
 class DbusShellyemService:
   def __init__(self, servicename, paths, productname='Shelly EM', connection='Shelly EM HTTP JSON service'):
     config = self._getConfig()
     deviceinstance = int(config['DEFAULT']['Deviceinstance'])
     customname = config['DEFAULT']['CustomName']
+    
+    # Read the config to see if we have more than one channel
     
     self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance))
     self._paths = paths

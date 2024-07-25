@@ -58,10 +58,10 @@ After that call the install.sh script.
 The following script should do everything for you:
 ```
 wget https://github.com/lewkowski/dbus-shelly-em/archive/refs/heads/main.zip
-unzip main.zip "dbus-shelly-em-main/*" -d /data
-mv /data/dbus-shelly-em-main /data/dbus-shelly-em
-chmod a+x /data/dbus-shelly-em/install.sh
-/data/dbus-shelly-em/install.sh
+unzip main.zip "dbus-shelly-em-smartmeter-main/*" -d /data
+mv /data/dbus-shelly-em-smartmeter-main /data/dbus-shelly-em-smartmeter
+chmod a+x /data/dbus-shelly-em/-smartmeter/install.sh
+/data/dbus-shelly-em-smartmeter/install.sh
 rm main.zip
 ```
 ⚠️ Check configuration after that - because service is already installed an running and with wrong connection data (host, username, pwd) you will spam the log-file
