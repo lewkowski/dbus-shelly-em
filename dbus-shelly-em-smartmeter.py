@@ -19,16 +19,19 @@ import configparser # for config/ini file
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
 from vedbus import VeDbusService
 
-# Reads both channels of the Shelly EM and updates the configured dbus service
+# Class to handle information for each Shelly EM Channel
+class ShellyEMChannel:
+  def __call__(self, config, channel, deviceinstance):
+    self.channel = channel
 
-class DbusShellyemService:
-  def __init__(self, servicename, paths, productname='Shelly EM', connection='Shelly EM HTTP JSON service'):
-    config = self._getConfig()
-    deviceinstance = int(config['DEFAULT']['Deviceinstance'])
     customname = config['DEFAULT']['CustomName']
     
-    # Read the config to see if we have more than one channel
-    
+    # Read the config and set up variables
+    servicename = config['DEFAULT']['DbusService']
+    connection = 'Shelly EM HTTP JSON service'
+    productname = 'Shelly EM'
+
+    # Create the DbusService Object
     self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance))
     self._paths = paths
     
@@ -61,6 +64,15 @@ class DbusShellyemService:
     for path, settings in self._paths.items():
       self._dbusservice.add_path(
         path, settings['initial'], gettextcallback=settings['textformat'], writeable=True, onchangecallback=self._handlechangedvalue)
+    pass    
+
+
+# Reads both channels of the Shelly EM and updates the configured dbus service
+class DbusShellyEMService:
+  def __init__(self, config, shellynum, productname='Shelly EM', connection='Shelly EM HTTP JSON service'):
+    
+    deviceinstance = int(config['DEFAULT']['Deviceinstance'])
+    
 
     # last update
     self._lastUpdate = 0
@@ -218,6 +230,15 @@ def main():
   try:
       logging.info("Start");
   
+      # Retrive the configuration information
+      config = self._getConfig()
+
+      numberofshelly = config['DEFAULT']['NumberOfShelly']
+
+      if (numberofshelly <= 0 or numberofshelly > 2):
+        # No Shelly devices assigned, throw an exception
+        raise ValueError("Number of Shelly devices not specified in config file")
+
       from dbus.mainloop.glib import DBusGMainLoop
       # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
       DBusGMainLoop(set_as_default=True)
@@ -228,7 +249,15 @@ def main():
       _w = lambda p, v: (str(round(v, 1)) + 'W')
       _v = lambda p, v: (str(round(v, 1)) + 'V')   
      
-      #start our main-service com.victronenergy.pvinverter instead of com.victronenergy.grid
+      # Start our Shelly EM Service(s)
+      ShellyEMServices = [None] * numberofshelly
+      # Always create at least One Shelly Service
+      ShellyEMServices[0] = DbusShellyemService (config, ShellyNum = 1)
+      # Check if we need to create the second Shelly Service
+      if (numberofshelly ==2):
+        ShellyEMServices[1] = DbusShellyemService (config, ShellyNum = 2)
+
+      if numberofshelly > 1)
       pvac_output = DbusShellyemService(
         servicename='com.victronenergy.pvinverter',
         paths={
