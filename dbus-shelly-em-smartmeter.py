@@ -14,38 +14,61 @@ import sys
 import time
 import requests # for http GET
 import configparser # for config/ini file
+import dbus
+import dbus.service
  
 # our own packages from victron
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
 from vedbus import VeDbusService
 
+
+# Again not all of these needed this is just duplicating the Victron code.
+class SystemBus(dbus.bus.BusConnection):
+    def __new__(cls):
+        return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SYSTEM)
+ 
+class SessionBus(dbus.bus.BusConnection):
+    def __new__(cls):
+        return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SESSION)
+ 
+def dbusconnection():
+    return SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else SystemBus()
+
+
 # Class to handle information for each Shelly EM Channel
 class ShellyEMChannel:
-  def __call__(self, config, shellynum, channel, shellyserial):
+  def __init__(self, config, shellynum, channel, shellyserial):
 
+    self._config = config
+    self._setupPaths()
 
     self.channel = channel
-    customname = config['DEFAULT']['CustomName']
     
     # Read the config and set up variables
-    shellysectionname = 'ShellyEM' + shellynum
-    channelsectionname = 'ShellyEM' + shellynum + 'Ch' + channel
+    shellysectionname = 'ShellyEM' + str(shellynum)
+    channelsectionname = shellysectionname + 'Ch' + str(channel)
 
     servicename = config[channelsectionname]['DbusService']
-    deviceinstance = config[shellysectionname]['Deviceinstance']
-                                       
-    self._connection = 'Shelly EM HTTP JSON service'
+    deviceinstance = int(config[channelsectionname]['Deviceinstance'])
+    customname = config[channelsectionname]['CustomName']                                   
+    
+    self._connection = 'Shelly EM HTTP Service Connection ' + channelsectionname
     self._productname = 'Shelly EM'
     self._shellyserial = shellyserial
 
+    dbuscall = "{}.http_{:02d}".format(servicename, deviceinstance)
+
     # Create the DbusService Object
-    self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance))
-    self._paths = paths
-    
-    logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
+    logging.info(f"DEBUG: Shelly Sec {shellysectionname}; Serial {shellyserial}; Channel {channelsectionname} ")
+    logging.info(f"DEBUG: Service {servicename}; Device {deviceinstance};")
+    logging.info(f"DEBUG: Dbus Call {dbuscall}")
+
+
+    # Connect to session bus whenever present, else use the system bus
+    self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance), dbusconnection())
     
     # Create the management objects, as specified in the ccgx dbus-api document
-    self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
+    self._dbusservice.add_path('/Mgmt/ProcessName', __file__ + str(shellynum))
     self._dbusservice.add_path('/Mgmt/ProcessVersion', 'Unkown version, and running on Python ' + platform.python_version())
     self._dbusservice.add_path('/Mgmt/Connection', self._connection)
     
@@ -64,7 +87,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/Connected', 1)
     self._dbusservice.add_path('/Role', 'grid')
     self._dbusservice.add_path('/Position', 0) # normaly only needed for pvinverter
-    self._dbusservice.add_path('/Serial', self._shellyserial)
+    self._dbusservice.add_path('/Serial', self._shellyserial) # Use the MAC address + the channel number
     self._dbusservice.add_path('/UpdateIndex', 0)
     
     # add path values to dbus
@@ -73,15 +96,96 @@ class ShellyEMChannel:
         path, settings['initial'], gettextcallback=settings['textformat'], writeable=True, onchangecallback=self._handlechangedvalue)
     pass    
 
+  def _setupPaths(self):
+    # Formatting for path values
+    _kwh = lambda p, v: (str(round(v, 2)) + 'KWh')
+    _a = lambda p, v: (str(round(v, 1)) + 'A')
+    _w = lambda p, v: (str(round(v, 1)) + 'W')
+    _v = lambda p, v: (str(round(v, 1)) + 'V') 
+
+    self._paths={
+    '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy input to the installation, i.e. bought from grid, or generated from Solar PV
+    '/Ac/Energy/Reverse': {'initial': 0, 'textformat': _kwh}, # energy output fro the installation, i.e. sold to the grid, or used to charge batteries etc.
+    '/Ac/Power': {'initial': 0, 'textformat': _w},
+          
+    '/Ac/Current': {'initial': 0, 'textformat': _a},
+    '/Ac/Voltage': {'initial': 0, 'textformat': _v},
+          
+    '/Ac/L1/Voltage': {'initial': 0, 'textformat': _v},
+      #     #'/Ac/L2/Voltage': {'initial': 0, 'textformat': _v},
+      #     #'/Ac/L3/Voltage': {'initial': 0, 'textformat': _v},
+    '/Ac/L1/Current': {'initial': 0, 'textformat': _a},
+      #     #'/Ac/L2/Current': {'initial': 0, 'textformat': _a},
+      #     #'/Ac/L3/Current': {'initial': 0, 'textformat': _a},
+    '/Ac/L1/Power': {'initial': 0, 'textformat': _w},
+      #     #'/Ac/L2/Power': {'initial': 0, 'textformat': _w},
+      #     #'/Ac/L3/Power': {'initial': 0, 'textformat': _w},
+    '/Ac/L1/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L2/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L3/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+    '/Ac/L1/Energy/Reverse': {'initial': 0, 'textformat': _kwh}
+      #     #'/Ac/L2/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L3/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
+    }
+
+    pass
+
+  def updateDbusValues(self, meter_data):
+
+
+    #send data to DBus
+    self._dbusservice['/Ac/L1/Voltage'] = meter_data['emeters'][self.channel]['voltage']
+
+    current = meter_data['emeters'][self.channel]['power'] / meter_data['emeters'][self.channel]['voltage']
+    self._dbusservice['/Ac/L1/Current'] = current
+    
+    self._dbusservice['/Ac/L1/Power'] = meter_data['emeters'][self.channel]['power']
+    self._dbusservice['/Ac/L1/Energy/Forward'] = (meter_data['emeters'][self.channel]['total']/1000)
+    self._dbusservice['/Ac/L1/Energy/Reverse'] = (meter_data['emeters'][self.channel]['total_returned']/1000)    
+    
+    
+    #self._dbusservice['/Ac/Power'] = meter_data['total_power'] # positive: consumption, negative: feed into grid
+    #self._dbusservice['/Ac/L2/Voltage'] = meter_data['emeters'][1]['voltage']
+    #self._dbusservice['/Ac/L2/Current'] = meter_data['emeters'][1]['current']
+    #self._dbusservice['/Ac/L2/Power'] = meter_data['emeters'][1]['power']
+    #self._dbusservice['/Ac/L2/Energy/Forward'] = (meter_data['emeters'][1]['total']/1000)
+    #self._dbusservice['/Ac/L2/Energy/Reverse'] = (meter_data['emeters'][1]['total_returned']/1000) 
+
+    #self._dbusservice['/Ac/L3/Voltage'] = meter_data['emeters'][2]['voltage']
+    #self._dbusservice['/Ac/L3/Current'] = meter_data['emeters'][2]['current']
+    #self._dbusservice['/Ac/L3/Power'] = meter_data['emeters'][2]['power']
+    #self._dbusservice['/Ac/L3/Energy/Forward'] = (meter_data['emeters'][2]['total']/1000)
+    #self._dbusservice['/Ac/L3/Energy/Reverse'] = (meter_data['emeters'][2]['total_returned']/1000) 
+    
+    self._dbusservice['/Ac/Current'] = self._dbusservice['/Ac/L1/Current']  
+    self._dbusservice['/Ac/Power'] = self._dbusservice['/Ac/L1/Power']
+    
+    #+ self._dbusservice['/Ac/L2/Energy/Forward'] + self._dbusservice['/Ac/L3/Energy/Forward']
+    #+ self._dbusservice['/Ac/L2/Energy/Reverse'] + self._dbusservice['/Ac/L3/Energy/Reverse'] 
+    
+
+    self._dbusservice['/Ac/Energy/Forward'] = self._dbusservice['/Ac/L1/Energy/Forward']
+    self._dbusservice['/Ac/Energy/Reverse'] = self._dbusservice['/Ac/L1/Energy/Reverse']      
+
+
+
+
+
+  def _handlechangedvalue(self, path, value):
+    logging.debug("someone else updated %s to %s" % (path, value))
+    return True # accept the change
 
 # Reads both channels of the Shelly EM and updates the configured dbus service
 class DbusShellyEMService:
 
   def __init__(self, config, shellynum, productname='Shelly EM', connection='Shelly EM HTTP JSON service'):
-  
+    self._config = config
+
     # Set the shellysectionname for this Shelly EM service
-    shellysection = 'ShellyEM' + str(shellynum)
-    
+    self._shellysection = 'ShellyEM' + str(shellynum)
+
+    logging.info(f"DEBUG: DbusShellyEMService {self._shellysection} ")
+
     # Create the URL to retrieve the Shelly EM Status JSON packet
     self._URL = self._getShellyStatusUrl()
 
@@ -91,10 +195,10 @@ class DbusShellyEMService:
     # Store our Shelly Channels in a list of channels 
     self._shellychannels = []
     # Create the Shelly Channels and store in the list, the device supports up to 2 channels
-    if (config[shellysection]['Channel1Active']):
-      self._shellychannels.append(ShellyEMChannel(config, shellynum, 1, shellyserial))
-    if (config[shellysection]['Channel2Active']):
-      self._shellychannels.append(ShellyEMChannel(config, shellynum, 2, shellyserial))
+    if (config[self._shellysection]['Channel0Active'] == 'True'):
+      self._shellychannels.append(ShellyEMChannel(config, shellynum, 0, shellyserial + str(0)))
+    if (config[self._shellysection]['Channel1Active'] == 'True'):
+      self._shellychannels.append(ShellyEMChannel(config, shellynum, 1, shellyserial + str(1)))
 
     # last update
     self._lastUpdate = 0
@@ -114,8 +218,7 @@ class DbusShellyEMService:
     return serial
  
   def _getSignOfLifeInterval(self):
-    config = self._getConfig()
-    value = config['DEFAULT']['SignOfLifeLog']
+    value = self._config['DEFAULT']['SignOfLifeLog']
     
     if not value: 
         value = 0
@@ -124,14 +227,9 @@ class DbusShellyEMService:
   
   # Creates the URL to use to connect to the Shelly EM and retrieve the status information
   def _getShellyStatusUrl(self):
-    config = self._getConfig()
-    accessType = config['DEFAULT']['AccessType']
     
-    if accessType == 'OnPremise': 
-        URL = "http://%s:%s@%s/status" % (config['ONPREMISE']['Username'], config['ONPREMISE']['Password'], config['ONPREMISE']['Host'])
-        URL = URL.replace(":@", "")
-    else:
-        raise ValueError("AccessType %s is not supported" % (config['DEFAULT']['AccessType']))
+    URL = "http://%s:%s@%s/status" % (self._config[self._shellysection]['Username'], self._config[self._shellysection]['Password'], self._config[self._shellysection]['Host'])
+    URL = URL.replace(":@", "")
     
     return URL
     
@@ -159,29 +257,25 @@ class DbusShellyEMService:
   def _signOfLife(self):
     logging.info("--- Start: sign of life ---")
     logging.info("Last _update() call: %s" % (self._lastUpdate))
-    logging.info("Last '/Ac/Power': %s" % (self._dbusservice['/Ac/Power']))
+    #logging.info("Last '/Ac/Power': %s" % (self._dbusservice['/Ac/Power']))
     logging.info("--- End: sign of life ---")
     return True
  
   def _update(self):  
 
     try:
-       #get data from Shelly em
-       meter_data = self._getShellyData()
+      #get data from Shelly em
+      meter_data = self._getShellyData()
       
       # Call update() on Shelly Channel(s) to update
-      
-       
-       
-       
+      for channel in self._shellychannels:
+        channel.updateDbusValues(meter_data)
+        
+    except Exception as e:
+      logging.critical('Error at %s', '_update', exc_info=e)
+
     # return true, otherwise add_timeout will be removed from GObject - see docs http://library.isr.ist.utl.pt/docs/pygtk2reference/gobject-functions.html#function-gobject--timeout-add
     return True
- 
-  def _handlechangedvalue(self, path, value):
-    logging.debug("someone else updated %s to %s" % (path, value))
-    return True # accept the change
- 
-
 
 def main():
   #configure logging
@@ -200,8 +294,9 @@ def main():
       config = configparser.ConfigParser()
       config.read("%s/config.ini" % (os.path.dirname(os.path.realpath(__file__))))
 
-      numberofshellys = config['DEFAULT']['NumberOfShellys']
-
+      numberofshellys = int(config['DEFAULT']['NumberOfShellys'])
+      logging.info(f"Num of Shellys: {numberofshellys}")
+                   
       if (numberofshellys <= 0):
         # No Shelly devices assigned, throw an exception
         raise ValueError("Number of Shelly devices specified in config file is not allowed")
@@ -211,18 +306,12 @@ def main():
       # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
       DBusGMainLoop(set_as_default=True)
      
-      #formatting 
-      _kwh = lambda p, v: (str(round(v, 2)) + 'KWh')
-      _a = lambda p, v: (str(round(v, 1)) + 'A')
-      _w = lambda p, v: (str(round(v, 1)) + 'W')
-      _v = lambda p, v: (str(round(v, 1)) + 'V')   
-     
       ### Start our Shelly EM Service(s)
 
       ShellyEMServices = []
       # Create a list of our Shelly Service(s)
       for i in range(1, numberofshellys+1):
-        ShellyEMServices.append(DbusShellyEMService (config, ShellyNum = i))
+        ShellyEMServices.append(DbusShellyEMService (config, shellynum = i))
 
       if (numberofshellys > 1):
         pass
