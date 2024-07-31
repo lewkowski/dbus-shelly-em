@@ -21,15 +21,22 @@ from vedbus import VeDbusService
 
 # Class to handle information for each Shelly EM Channel
 class ShellyEMChannel:
-  def __call__(self, config, channel, deviceinstance):
-    self.channel = channel
+  def __call__(self, config, shellynum, channel, shellyserial):
 
+
+    self.channel = channel
     customname = config['DEFAULT']['CustomName']
     
     # Read the config and set up variables
-    servicename = config['DEFAULT']['DbusService']
-    connection = 'Shelly EM HTTP JSON service'
-    productname = 'Shelly EM'
+    shellysectionname = 'ShellyEM' + shellynum
+    channelsectionname = 'ShellyEM' + shellynum + 'Ch' + channel
+
+    servicename = config[channelsectionname]['DbusService']
+    deviceinstance = config[shellysectionname]['Deviceinstance']
+                                       
+    self._connection = 'Shelly EM HTTP JSON service'
+    self._productname = 'Shelly EM'
+    self._shellyserial = shellyserial
 
     # Create the DbusService Object
     self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance))
@@ -40,7 +47,7 @@ class ShellyEMChannel:
     # Create the management objects, as specified in the ccgx dbus-api document
     self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
     self._dbusservice.add_path('/Mgmt/ProcessVersion', 'Unkown version, and running on Python ' + platform.python_version())
-    self._dbusservice.add_path('/Mgmt/Connection', connection)
+    self._dbusservice.add_path('/Mgmt/Connection', self._connection)
     
     # Create the mandatory objects
     self._dbusservice.add_path('/DeviceInstance', deviceinstance)
@@ -49,7 +56,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/ProductId', 45069) # found on https://www.sascha-curth.de/projekte/005_Color_Control_GX.html#experiment - should be an ET340 Engerie Meter
     #self._dbusservice.add_path('/ProductId', 0xB023) # id needs to be assigned by Victron Support current value for testing
     self._dbusservice.add_path('/DeviceType', 345) # found on https://www.sascha-curth.de/projekte/005_Color_Control_GX.html#experiment - should be an ET340 Engerie Meter
-    self._dbusservice.add_path('/ProductName', productname)
+    self._dbusservice.add_path('/ProductName', self._productname)
     self._dbusservice.add_path('/CustomName', customname)    
     self._dbusservice.add_path('/Latency', None)    
     self._dbusservice.add_path('/FirmwareVersion', 0.1)
@@ -57,7 +64,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/Connected', 1)
     self._dbusservice.add_path('/Role', 'grid')
     self._dbusservice.add_path('/Position', 0) # normaly only needed for pvinverter
-    self._dbusservice.add_path('/Serial', self._getShellySerial())
+    self._dbusservice.add_path('/Serial', self._shellyserial)
     self._dbusservice.add_path('/UpdateIndex', 0)
     
     # add path values to dbus
@@ -69,35 +76,42 @@ class ShellyEMChannel:
 
 # Reads both channels of the Shelly EM and updates the configured dbus service
 class DbusShellyEMService:
+
   def __init__(self, config, shellynum, productname='Shelly EM', connection='Shelly EM HTTP JSON service'):
+  
+    # Set the shellysectionname for this Shelly EM service
+    shellysection = 'ShellyEM' + str(shellynum)
     
-    deviceinstance = int(config['DEFAULT']['Deviceinstance'])
-    
+    # Create the URL to retrieve the Shelly EM Status JSON packet
+    self._URL = self._getShellyStatusUrl()
+
+    # Get the Shelly MAC address as serial number
+    shellyserial = self._getShellySerial()
+
+    # Store our Shelly Channels in a list of channels 
+    self._shellychannels = []
+    # Create the Shelly Channels and store in the list, the device supports up to 2 channels
+    if (config[shellysection]['Channel1Active']):
+      self._shellychannels.append(ShellyEMChannel(config, shellynum, 1, shellyserial))
+    if (config[shellysection]['Channel2Active']):
+      self._shellychannels.append(ShellyEMChannel(config, shellynum, 2, shellyserial))
 
     # last update
     self._lastUpdate = 0
-
     # add _update function 'timer'
-    gobject.timeout_add(250, self._update) # pause 250ms before the next request
-    
+    gobject.timeout_add(1000, self._update) # pause 1000ms before the next request
     # add _signOfLife 'timer' to get feedback in log every 5minutes
     gobject.timeout_add(self._getSignOfLifeInterval()*60*1000, self._signOfLife)
  
+  # Get the Shelly EM Serial number from the Shelly EM device
   def _getShellySerial(self):
     meter_data = self._getShellyData()  
-    
+
     if not meter_data['mac']:
         raise ValueError("Response does not contain 'mac' attribute")
-    
     serial = meter_data['mac']
+
     return serial
- 
- 
-  def _getConfig(self):
-    config = configparser.ConfigParser()
-    config.read("%s/config.ini" % (os.path.dirname(os.path.realpath(__file__))))
-    return config;
- 
  
   def _getSignOfLifeInterval(self):
     config = self._getConfig()
@@ -108,7 +122,7 @@ class DbusShellyEMService:
     
     return int(value)
   
-  
+  # Creates the URL to use to connect to the Shelly EM and retrieve the status information
   def _getShellyStatusUrl(self):
     config = self._getConfig()
     accessType = config['DEFAULT']['AccessType']
@@ -121,21 +135,23 @@ class DbusShellyEMService:
     
     return URL
     
- 
+  # Connects to the Shelly EM via the URL and returns the JSON status packet
   def _getShellyData(self):
-    URL = self._getShellyStatusUrl()
-    meter_r = requests.get(url = URL)
+    meter_data = None
+
+    # Make HTTP request to Shelly EM
+    meter_r = requests.get(url = self._URL)
     
-    # check for response
+    # Check for response
     if not meter_r:
-        raise ConnectionError("No response from Shelly EM - %s" % (URL))
+        raise ConnectionError("No response from Shelly EM - %s" % (self._URL))
     
+    # Pull out JSON response from HTTP request
     meter_data = meter_r.json()     
     
-    # check for Json
+    # Check for JSON packet
     if not meter_data:
         raise ValueError("Converting response to JSON failed")
-    
     
     return meter_data
  
@@ -147,66 +163,16 @@ class DbusShellyEMService:
     logging.info("--- End: sign of life ---")
     return True
  
-  def _update(self):   
+  def _update(self):  
+
     try:
        #get data from Shelly em
        meter_data = self._getShellyData()
       
+      # Call update() on Shelly Channel(s) to update
       
        
-       #send data to DBus
-       self._dbusservice['/Ac/L1/Voltage'] = meter_data['emeters'][0]['voltage']
- 
-       current = meter_data['emeters'][1]['power'] / meter_data['emeters'][0]['voltage']
-       self._dbusservice['/Ac/L1/Current'] = current
-
-       #change to [1] for second probe in Shelly EM
-       self._dbusservice['/Ac/L1/Power'] = meter_data['emeters'][1]['power']
-       self._dbusservice['/Ac/L1/Energy/Forward'] = (meter_data['emeters'][1]['total']/1000)
-       self._dbusservice['/Ac/L1/Energy/Reverse'] = (meter_data['emeters'][1]['total_returned']/1000)    
        
-        
-       #self._dbusservice['/Ac/Power'] = meter_data['total_power'] # positive: consumption, negative: feed into grid
-       #self._dbusservice['/Ac/L2/Voltage'] = meter_data['emeters'][1]['voltage']
-       #self._dbusservice['/Ac/L2/Current'] = meter_data['emeters'][1]['current']
-       #self._dbusservice['/Ac/L2/Power'] = meter_data['emeters'][1]['power']
-       #self._dbusservice['/Ac/L2/Energy/Forward'] = (meter_data['emeters'][1]['total']/1000)
-       #self._dbusservice['/Ac/L2/Energy/Reverse'] = (meter_data['emeters'][1]['total_returned']/1000) 
-
-       #self._dbusservice['/Ac/L3/Voltage'] = meter_data['emeters'][2]['voltage']
-       #self._dbusservice['/Ac/L3/Current'] = meter_data['emeters'][2]['current']
-       #self._dbusservice['/Ac/L3/Power'] = meter_data['emeters'][2]['power']
-       #self._dbusservice['/Ac/L3/Energy/Forward'] = (meter_data['emeters'][2]['total']/1000)
-       #self._dbusservice['/Ac/L3/Energy/Reverse'] = (meter_data['emeters'][2]['total_returned']/1000) 
-       
-       self._dbusservice['/Ac/Current'] = self._dbusservice['/Ac/L1/Current']  
-       self._dbusservice['/Ac/Power'] = self._dbusservice['/Ac/L1/Power']
-       
-       #+ self._dbusservice['/Ac/L2/Energy/Forward'] + self._dbusservice['/Ac/L3/Energy/Forward']
-       #+ self._dbusservice['/Ac/L2/Energy/Reverse'] + self._dbusservice['/Ac/L3/Energy/Reverse'] 
-       
-
-       self._dbusservice['/Ac/Energy/Forward'] = self._dbusservice['/Ac/L1/Energy/Forward']
-       self._dbusservice['/Ac/Energy/Reverse'] = self._dbusservice['/Ac/L1/Energy/Reverse'] 
-
-      
-     
-       #logging
-       logging.debug("House Consumption (/Ac/Power): %s" % (self._dbusservice['/Ac/Power']))
-       logging.debug("House Forward (/Ac/Energy/Forward): %s" % (self._dbusservice['/Ac/Energy/Forward']))
-       logging.debug("House Reverse (/Ac/Energy/Revers): %s" % (self._dbusservice['/Ac/Energy/Reverse']))
-       logging.debug("---");
-       
-       # increment UpdateIndex - to show that new data is available
-       index = self._dbusservice['/UpdateIndex'] + 1  # increment index
-       if index > 255:   # maximum value of the index
-         index = 0       # overflow from 255 to 0
-       self._dbusservice['/UpdateIndex'] = index
-
-       #update lastupdate vars
-       self._lastUpdate = time.time()              
-    except Exception as e:
-       logging.critical('Error at %s', '_update', exc_info=e)
        
     # return true, otherwise add_timeout will be removed from GObject - see docs http://library.isr.ist.utl.pt/docs/pygtk2reference/gobject-functions.html#function-gobject--timeout-add
     return True
@@ -228,18 +194,20 @@ def main():
                             ])
  
   try:
-      logging.info("Start");
+      logging.info("Start")
   
       # Retrive the configuration information
-      config = self._getConfig()
+      config = configparser.ConfigParser()
+      config.read("%s/config.ini" % (os.path.dirname(os.path.realpath(__file__))))
 
-      numberofshelly = config['DEFAULT']['NumberOfShelly']
+      numberofshellys = config['DEFAULT']['NumberOfShellys']
 
-      if (numberofshelly <= 0 or numberofshelly > 2):
+      if (numberofshellys <= 0):
         # No Shelly devices assigned, throw an exception
-        raise ValueError("Number of Shelly devices not specified in config file")
+        raise ValueError("Number of Shelly devices specified in config file is not allowed")
 
       from dbus.mainloop.glib import DBusGMainLoop
+
       # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
       DBusGMainLoop(set_as_default=True)
      
@@ -249,45 +217,47 @@ def main():
       _w = lambda p, v: (str(round(v, 1)) + 'W')
       _v = lambda p, v: (str(round(v, 1)) + 'V')   
      
-      # Start our Shelly EM Service(s)
-      ShellyEMServices = [None] * numberofshelly
-      # Always create at least One Shelly Service
-      ShellyEMServices[0] = DbusShellyemService (config, ShellyNum = 1)
-      # Check if we need to create the second Shelly Service
-      if (numberofshelly ==2):
-        ShellyEMServices[1] = DbusShellyemService (config, ShellyNum = 2)
+      ### Start our Shelly EM Service(s)
 
-      if numberofshelly > 1)
-      pvac_output = DbusShellyemService(
-        servicename='com.victronenergy.pvinverter',
-        paths={
-          '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy bought from the grid
-          '/Ac/Energy/Reverse': {'initial': 0, 'textformat': _kwh}, # energy sold to the grid
-          '/Ac/Power': {'initial': 0, 'textformat': _w},
+      ShellyEMServices = []
+      # Create a list of our Shelly Service(s)
+      for i in range(1, numberofshellys+1):
+        ShellyEMServices.append(DbusShellyEMService (config, ShellyNum = i))
+
+      if (numberofshellys > 1):
+        pass
+        
+      # pvac_output = DbusShellyemService(
+      #   servicename='com.victronenergy.pvinverter',
+      #   paths={
+      #     '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy bought from the grid
+      #     '/Ac/Energy/Reverse': {'initial': 0, 'textformat': _kwh}, # energy sold to the grid
+      #     '/Ac/Power': {'initial': 0, 'textformat': _w},
           
-          '/Ac/Current': {'initial': 0, 'textformat': _a},
-          '/Ac/Voltage': {'initial': 0, 'textformat': _v},
+      #     '/Ac/Current': {'initial': 0, 'textformat': _a},
+      #     '/Ac/Voltage': {'initial': 0, 'textformat': _v},
           
-          '/Ac/L1/Voltage': {'initial': 0, 'textformat': _v},
-          #'/Ac/L2/Voltage': {'initial': 0, 'textformat': _v},
-          #'/Ac/L3/Voltage': {'initial': 0, 'textformat': _v},
-          '/Ac/L1/Current': {'initial': 0, 'textformat': _a},
-          #'/Ac/L2/Current': {'initial': 0, 'textformat': _a},
-          #'/Ac/L3/Current': {'initial': 0, 'textformat': _a},
-          '/Ac/L1/Power': {'initial': 0, 'textformat': _w},
-          #'/Ac/L2/Power': {'initial': 0, 'textformat': _w},
-          #'/Ac/L3/Power': {'initial': 0, 'textformat': _w},
-          '/Ac/L1/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-          #'/Ac/L2/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-          #'/Ac/L3/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-          '/Ac/L1/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-          #'/Ac/L2/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-          #'/Ac/L3/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-        })
+      #     '/Ac/L1/Voltage': {'initial': 0, 'textformat': _v},
+      #     #'/Ac/L2/Voltage': {'initial': 0, 'textformat': _v},
+      #     #'/Ac/L3/Voltage': {'initial': 0, 'textformat': _v},
+      #     '/Ac/L1/Current': {'initial': 0, 'textformat': _a},
+      #     #'/Ac/L2/Current': {'initial': 0, 'textformat': _a},
+      #     #'/Ac/L3/Current': {'initial': 0, 'textformat': _a},
+      #     '/Ac/L1/Power': {'initial': 0, 'textformat': _w},
+      #     #'/Ac/L2/Power': {'initial': 0, 'textformat': _w},
+      #     #'/Ac/L3/Power': {'initial': 0, 'textformat': _w},
+      #     '/Ac/L1/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L2/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L3/Energy/Forward': {'initial': 0, 'textformat': _kwh},
+      #     '/Ac/L1/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L2/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
+      #     #'/Ac/L3/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
+      #   })
      
       logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
       mainloop = gobject.MainLoop()
-      mainloop.run()            
+      mainloop.run()    
+
   except Exception as e:
     logging.critical('Error at %s', 'main', exc_info=e)
 if __name__ == "__main__":
