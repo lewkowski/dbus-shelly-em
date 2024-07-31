@@ -45,8 +45,8 @@ class ShellyEMChannel:
     self.channel = channel
     
     # Read the config and set up variables
-    shellysectionname = 'ShellyEM' + str(shellynum)
-    channelsectionname = shellysectionname + 'Ch' + str(channel)
+    self._shellysectionname = 'ShellyEM' + str(shellynum)
+    channelsectionname = self._shellysectionname + 'Ch' + str(channel)
 
     servicename = config[channelsectionname]['DbusService']
     deviceinstance = int(config[channelsectionname]['Deviceinstance'])
@@ -59,10 +59,9 @@ class ShellyEMChannel:
     dbuscall = "{}.http_{:02d}".format(servicename, deviceinstance)
 
     # Create the DbusService Object
-    logging.info(f"DEBUG: Shelly Sec {shellysectionname}; Serial {shellyserial}; Channel {channelsectionname} ")
+    logging.info(f"DEBUG: Shelly Sec {self._shellysectionname}; Serial {shellyserial}; Channel {channelsectionname} ")
     logging.info(f"DEBUG: Service {servicename}; Device {deviceinstance};")
     logging.info(f"DEBUG: Dbus Call {dbuscall}")
-
 
     # Connect to session bus whenever present, else use the system bus
     self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance), dbusconnection())
@@ -86,7 +85,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/HardwareVersion', 0)
     self._dbusservice.add_path('/Connected', 1)
     self._dbusservice.add_path('/Role', 'grid')
-    self._dbusservice.add_path('/Position', 0) # normaly only needed for pvinverter
+    self._dbusservice.add_path('/Position', config[channelsectionname]['Position']) # normaly only needed for pvinverter
     self._dbusservice.add_path('/Serial', self._shellyserial) # Use the MAC address + the channel number
     self._dbusservice.add_path('/UpdateIndex', 0)
     
@@ -132,47 +131,29 @@ class ShellyEMChannel:
 
   def updateDbusValues(self, meter_data):
 
-
     #send data to DBus
     self._dbusservice['/Ac/L1/Voltage'] = meter_data['emeters'][self.channel]['voltage']
-
     current = meter_data['emeters'][self.channel]['power'] / meter_data['emeters'][self.channel]['voltage']
     self._dbusservice['/Ac/L1/Current'] = current
-    
     self._dbusservice['/Ac/L1/Power'] = meter_data['emeters'][self.channel]['power']
     self._dbusservice['/Ac/L1/Energy/Forward'] = (meter_data['emeters'][self.channel]['total']/1000)
     self._dbusservice['/Ac/L1/Energy/Reverse'] = (meter_data['emeters'][self.channel]['total_returned']/1000)    
-    
-    
-    #self._dbusservice['/Ac/Power'] = meter_data['total_power'] # positive: consumption, negative: feed into grid
-    #self._dbusservice['/Ac/L2/Voltage'] = meter_data['emeters'][1]['voltage']
-    #self._dbusservice['/Ac/L2/Current'] = meter_data['emeters'][1]['current']
-    #self._dbusservice['/Ac/L2/Power'] = meter_data['emeters'][1]['power']
-    #self._dbusservice['/Ac/L2/Energy/Forward'] = (meter_data['emeters'][1]['total']/1000)
-    #self._dbusservice['/Ac/L2/Energy/Reverse'] = (meter_data['emeters'][1]['total_returned']/1000) 
-
-    #self._dbusservice['/Ac/L3/Voltage'] = meter_data['emeters'][2]['voltage']
-    #self._dbusservice['/Ac/L3/Current'] = meter_data['emeters'][2]['current']
-    #self._dbusservice['/Ac/L3/Power'] = meter_data['emeters'][2]['power']
-    #self._dbusservice['/Ac/L3/Energy/Forward'] = (meter_data['emeters'][2]['total']/1000)
-    #self._dbusservice['/Ac/L3/Energy/Reverse'] = (meter_data['emeters'][2]['total_returned']/1000) 
-    
     self._dbusservice['/Ac/Current'] = self._dbusservice['/Ac/L1/Current']  
     self._dbusservice['/Ac/Power'] = self._dbusservice['/Ac/L1/Power']
-    
-    #+ self._dbusservice['/Ac/L2/Energy/Forward'] + self._dbusservice['/Ac/L3/Energy/Forward']
-    #+ self._dbusservice['/Ac/L2/Energy/Reverse'] + self._dbusservice['/Ac/L3/Energy/Reverse'] 
-    
-
     self._dbusservice['/Ac/Energy/Forward'] = self._dbusservice['/Ac/L1/Energy/Forward']
-    self._dbusservice['/Ac/Energy/Reverse'] = self._dbusservice['/Ac/L1/Energy/Reverse']      
+    self._dbusservice['/Ac/Energy/Reverse'] = self._dbusservice['/Ac/L1/Energy/Reverse']
 
+    # increment UpdateIndex - to show that new data is available, retrieve the index and increment
+    index = self._dbusservice['/UpdateIndex'] + 1  # increment index
+    if (index > 255):   # maximum value of the index
+      index = 0       # overflow from 255 to 0
+    self._dbusservice['/UpdateIndex'] = index
 
-
-
+    #update lastupdate vars
+    self._lastUpdate = time.time()          
 
   def _handlechangedvalue(self, path, value):
-    logging.debug("someone else updated %s to %s" % (path, value))
+    logging.debug(f"Some other service (not {self._}) updated {path} to {value}")
     return True # accept the change
 
 # Reads both channels of the Shelly EM and updates the configured dbus service
@@ -183,6 +164,7 @@ class DbusShellyEMService:
 
     # Set the shellysectionname for this Shelly EM service
     self._shellysection = 'ShellyEM' + str(shellynum)
+    self._hostname = config[self._shellysection]['Host']
 
     logging.info(f"DEBUG: DbusShellyEMService {self._shellysection} ")
 
@@ -228,7 +210,7 @@ class DbusShellyEMService:
   # Creates the URL to use to connect to the Shelly EM and retrieve the status information
   def _getShellyStatusUrl(self):
     
-    URL = "http://%s:%s@%s/status" % (self._config[self._shellysection]['Username'], self._config[self._shellysection]['Password'], self._config[self._shellysection]['Host'])
+    URL = "http://%s:%s@%s/status" % (self._config[self._shellysection]['Username'], self._config[self._shellysection]['Password'], self._hostname)
     URL = URL.replace(":@", "")
     
     return URL
@@ -237,20 +219,30 @@ class DbusShellyEMService:
   def _getShellyData(self):
     meter_data = None
 
-    # Make HTTP request to Shelly EM
-    meter_r = requests.get(url = self._URL)
+    try:
+      # Make HTTP request to Shelly EM
+      meter_r = requests.get(url = self._URL)
     
-    # Check for response
-    if not meter_r:
+      # Check for response
+      if not meter_r:
         raise ConnectionError("No response from Shelly EM - %s" % (self._URL))
     
-    # Pull out JSON response from HTTP request
-    meter_data = meter_r.json()     
+      # Pull out JSON response from HTTP request
+      meter_data = meter_r.json()     
     
-    # Check for JSON packet
-    if not meter_data:
+      # Check for JSON packet
+      if not meter_data:
         raise ValueError("Converting response to JSON failed")
-    
+      
+    except ConnectionError as e:
+      if 'No route to host' in str(e):
+        logging.info("No route to host -> Shelly EM at {self._hostname}")
+      else:
+        logging.info(f"An unexpected error occurred: {e}")
+
+    #except Exception as e:
+    #  logging.critical(f'Failed to connect to Shelly EM at {self._hostname}', exc_info=e)
+
     return meter_data
  
  
