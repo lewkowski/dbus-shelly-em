@@ -40,21 +40,23 @@ class ShellyEMChannel:
   def __init__(self, config, shellynum, channel, shellyserial):
 
     self._config = config
-    self._setupPaths()
-
     self.channel = channel
     
     # Read the config and set up variables
     self._shellysectionname = 'ShellyEM' + str(shellynum)
     channelsectionname = self._shellysectionname + 'Ch' + str(channel)
 
-    servicename = config[channelsectionname]['DbusService']
+    servicename = 'com.victronenergy.' + config[channelsectionname]['DbusService']
     deviceinstance = int(config[channelsectionname]['Deviceinstance'])
-    customname = config[channelsectionname]['CustomName']                                   
-    
-    self._connection = 'Shelly EM HTTP Service Connection ' + channelsectionname
+    customname = config[channelsectionname]['CustomName']
+
+    self._dbusservicename = config[channelsectionname]['DbusService']
+    self._connection = 'HTTP ' + channelsectionname
     self._productname = 'Shelly EM'
     self._shellyserial = shellyserial
+    self._phase = config[channelsectionname]['Phase']
+
+    self._setupPaths()
 
     dbuscall = "{}.http_{:02d}".format(servicename, deviceinstance)
 
@@ -73,10 +75,7 @@ class ShellyEMChannel:
     
     # Create the mandatory objects
     self._dbusservice.add_path('/DeviceInstance', deviceinstance)
-    #self._dbusservice.add_path('/ProductId', 16) # value used in ac_sensor_bridge.cpp of dbus-cgwacs
-    #self._dbusservice.add_path('/ProductId', 0xFFFF) # id assigned by Victron Support from SDM630v2.py
-    self._dbusservice.add_path('/ProductId', 45069) # found on https://www.sascha-curth.de/projekte/005_Color_Control_GX.html#experiment - should be an ET340 Engerie Meter
-    #self._dbusservice.add_path('/ProductId', 0xB023) # id needs to be assigned by Victron Support current value for testing
+    self._dbusservice.add_path('/ProductId', 0xB034) # For Shelly EM/3EM, found on https://gist.github.com/seidler2547/52f3e91cbcbf2fa257ae79371bb78588 
     self._dbusservice.add_path('/DeviceType', 345) # found on https://www.sascha-curth.de/projekte/005_Color_Control_GX.html#experiment - should be an ET340 Engerie Meter
     self._dbusservice.add_path('/ProductName', self._productname)
     self._dbusservice.add_path('/CustomName', customname)    
@@ -84,10 +83,12 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/FirmwareVersion', 0.1)
     self._dbusservice.add_path('/HardwareVersion', 0)
     self._dbusservice.add_path('/Connected', 1)
-    self._dbusservice.add_path('/Role', 'grid')
     self._dbusservice.add_path('/Position', config[channelsectionname]['Position']) # normaly only needed for pvinverter
     self._dbusservice.add_path('/Serial', self._shellyserial) # Use the MAC address + the channel number
     self._dbusservice.add_path('/UpdateIndex', 0)
+
+    if (self._dbusservicename == 'pvinverter'):  
+      self._dbusservice.add_path('/StatusCode', 0)
     
     # add path values to dbus
     for path, settings in self._paths.items():
@@ -104,44 +105,50 @@ class ShellyEMChannel:
 
     self._paths={
     '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy input to the installation, i.e. bought from grid, or generated from Solar PV
-    '/Ac/Energy/Reverse': {'initial': 0, 'textformat': _kwh}, # energy output fro the installation, i.e. sold to the grid, or used to charge batteries etc.
+    
     '/Ac/Power': {'initial': 0, 'textformat': _w},
-          
     '/Ac/Current': {'initial': 0, 'textformat': _a},
     '/Ac/Voltage': {'initial': 0, 'textformat': _v},
-          
-    '/Ac/L1/Voltage': {'initial': 0, 'textformat': _v},
-      #     #'/Ac/L2/Voltage': {'initial': 0, 'textformat': _v},
-      #     #'/Ac/L3/Voltage': {'initial': 0, 'textformat': _v},
-    '/Ac/L1/Current': {'initial': 0, 'textformat': _a},
-      #     #'/Ac/L2/Current': {'initial': 0, 'textformat': _a},
-      #     #'/Ac/L3/Current': {'initial': 0, 'textformat': _a},
-    '/Ac/L1/Power': {'initial': 0, 'textformat': _w},
-      #     #'/Ac/L2/Power': {'initial': 0, 'textformat': _w},
-      #     #'/Ac/L3/Power': {'initial': 0, 'textformat': _w},
-    '/Ac/L1/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L2/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L3/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-    '/Ac/L1/Energy/Reverse': {'initial': 0, 'textformat': _kwh}
-      #     #'/Ac/L2/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L3/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-    }
 
-    pass
+    '/Ac/' + self._phase + '/Voltage': {'initial': 0, 'textformat': _v},
+    '/Ac/' + self._phase + '/Current': {'initial': 0, 'textformat': _a},
+    '/Ac/' + self._phase + '/Power': {'initial': 0, 'textformat': _w},
+    '/Ac/' + self._phase + '/Energy/Forward': {'initial': None, 'textformat': _kwh},
+
+  
+    }
+    if (self._dbusservicename != 'pvinverter'):
+      self._paths['/Ac/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh} # energy output fro the installation, i.e. sold to the grid, or used to charge batteries etc.
+      self._paths['/Ac/' + self._phase + '/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh}
 
   def updateDbusValues(self, meter_data):
+    # Old Send
+    power = meter_data['emeters'][self.channel]['power']
+    voltage = meter_data['emeters'][self.channel]['voltage']
+    energy_total = meter_data['emeters'][self.channel]['total'] / 1000
+    energy_total_returned = meter_data['emeters'][self.channel]['total_returned'] / 1000
 
-    #send data to DBus
-    self._dbusservice['/Ac/L1/Voltage'] = meter_data['emeters'][self.channel]['voltage']
-    current = meter_data['emeters'][self.channel]['power'] / meter_data['emeters'][self.channel]['voltage']
-    self._dbusservice['/Ac/L1/Current'] = current
-    self._dbusservice['/Ac/L1/Power'] = meter_data['emeters'][self.channel]['power']
-    self._dbusservice['/Ac/L1/Energy/Forward'] = (meter_data['emeters'][self.channel]['total']/1000)
-    self._dbusservice['/Ac/L1/Energy/Reverse'] = (meter_data['emeters'][self.channel]['total_returned']/1000)    
-    self._dbusservice['/Ac/Current'] = self._dbusservice['/Ac/L1/Current']  
-    self._dbusservice['/Ac/Power'] = self._dbusservice['/Ac/L1/Power']
-    self._dbusservice['/Ac/Energy/Forward'] = self._dbusservice['/Ac/L1/Energy/Forward']
-    self._dbusservice['/Ac/Energy/Reverse'] = self._dbusservice['/Ac/L1/Energy/Reverse']
+    self._dbusservice['/Ac/' + self._phase + '/Voltage'] = voltage
+    
+    if (voltage != 0):
+      current = power / voltage
+    else:
+      current = 0
+    
+
+    self._dbusservice['/Ac/' + self._phase + '/Current'] = current
+    self._dbusservice['/Ac/' + self._phase + '/Power'] = power
+    self._dbusservice['/Ac/' + self._phase + '/Energy/Forward'] = energy_total
+        
+    self._dbusservice['/Ac/Current'] = current  
+    self._dbusservice['/Ac/Power'] = power
+    self._dbusservice['/Ac/Voltage'] = voltage
+    self._dbusservice['/Ac/Energy/Forward'] = energy_total
+
+    # Don't update reverse Energy for PVInverters
+    if (self._dbusservicename != 'pvinverter'):
+      self._dbusservice['/Ac/Energy/Reverse'] = energy_total_returned
+      self._dbusservice['/Ac/' + self._phase + '/Energy/Reverse'] = energy_total_returned
 
     # increment UpdateIndex - to show that new data is available, retrieve the index and increment
     index = self._dbusservice['/UpdateIndex'] + 1  # increment index
