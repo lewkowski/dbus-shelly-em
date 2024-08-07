@@ -45,7 +45,6 @@ class ShellyEMChannel:
     # Read the config and set up variables
     self._shellysectionname = 'ShellyEM' + str(shellynum)
     channelsectionname = self._shellysectionname + 'Ch' + str(channel)
-
     servicename = 'com.victronenergy.' + config[channelsectionname]['DbusService']
     deviceinstance = int(config[channelsectionname]['Deviceinstance'])
     customname = config[channelsectionname]['CustomName']
@@ -55,7 +54,6 @@ class ShellyEMChannel:
     self._productname = 'Shelly EM'
     self._shellyserial = shellyserial
     self._phase = config[channelsectionname]['Phase']
-
     self._setupPaths()
 
     dbuscallname = "{}.http_{:02d}".format(servicename, deviceinstance)
@@ -169,17 +167,19 @@ class DbusShellyEMService:
     # Set the shellysectionname for this Shelly EM service
     self._shellysection = 'ShellyEM' + str(shellynum)
     self._hostname = config[self._shellysection]['Host']
-
-    logging.info(f"DEBUG: DbusShellyEMService {self._shellysection} ")
+    updatefrequency = int(config[self._shellysection]['UpdateFrequency'])
+    if (updatefrequency < 100):
+      updatefrequency = 1000  # Don't faster than every 100ms
 
     # Create the URL to retrieve the Shelly EM Status JSON packet
     self._URL = self._getShellyStatusUrl()
+    shellyserial = self._getShellySerial()  # Get the Shelly MAC address
 
-    # Get the Shelly MAC address as serial number
-    shellyserial = self._getShellySerial()
+    logging.info(f"DEBUG: DbusShellyEMService {self._shellysection} MAC: {shellyserial} ")
 
     # Store our Shelly Channels in a list of channels 
     self._shellychannels = []
+
     # Create the Shelly Channels and store in the list, the device supports up to 2 channels
     if (config[self._shellysection]['Channel0Active'] == 'True'):
       self._shellychannels.append(ShellyEMChannel(config, shellynum, 0, shellyserial + str(0)))
@@ -189,7 +189,7 @@ class DbusShellyEMService:
     # last update
     self._lastUpdate = 0
     # add _update function 'timer'
-    gobject.timeout_add(1000, self._update) # pause 1000ms before the next request
+    gobject.timeout_add(updatefrequency, self._update) # pause 1000ms before the next request
     # add _signOfLife 'timer' to get feedback in log every 5minutes
     gobject.timeout_add(self._getSignOfLifeInterval()*60*1000, self._signOfLife)
  
