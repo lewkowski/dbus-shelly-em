@@ -58,16 +58,17 @@ class ShellyEMChannel:
 
     self._setupPaths()
 
-    dbuscall = "{}.http_{:02d}".format(servicename, deviceinstance)
+    dbuscallname = "{}.http_{:02d}".format(servicename, deviceinstance)
 
     # Create the DbusService Object
     logging.info(f"DEBUG: Shelly Sec {self._shellysectionname}; Serial {shellyserial}; Channel {channelsectionname} ")
     logging.info(f"DEBUG: Service {servicename}; Device {deviceinstance};")
-    logging.info(f"DEBUG: Dbus Call {dbuscall}")
+    logging.info(f"DEBUG: Dbus Call {dbuscallname}")
 
     # Connect to session bus whenever present, else use the system bus
-    self._dbusservice = VeDbusService("{}.http_{:02d}".format(servicename, deviceinstance), dbusconnection())
-    
+    self._dbusservice = VeDbusService(dbuscallname, dbusconnection())
+    logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
+
     # Create the management objects, as specified in the ccgx dbus-api document
     self._dbusservice.add_path('/Mgmt/ProcessName', __file__ + str(shellynum))
     self._dbusservice.add_path('/Mgmt/ProcessVersion', 'Unkown version, and running on Python ' + platform.python_version())
@@ -83,7 +84,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/FirmwareVersion', 0.1)
     self._dbusservice.add_path('/HardwareVersion', 0)
     self._dbusservice.add_path('/Connected', 1)
-    self._dbusservice.add_path('/Position', config[channelsectionname]['Position']) # normaly only needed for pvinverter
+    self._dbusservice.add_path('/Position', int(config[channelsectionname]['Position'])) # 0 = AC input 1, 1 = AC output 1, 2 = AC output 2
     self._dbusservice.add_path('/Serial', self._shellyserial) # Use the MAC address + the channel number
     self._dbusservice.add_path('/UpdateIndex', 0)
 
@@ -104,38 +105,34 @@ class ShellyEMChannel:
     _v = lambda p, v: (str(round(v, 1)) + 'V') 
 
     self._paths={
-    '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy input to the installation, i.e. bought from grid, or generated from Solar PV
-    
     '/Ac/Power': {'initial': 0, 'textformat': _w},
     '/Ac/Current': {'initial': 0, 'textformat': _a},
     '/Ac/Voltage': {'initial': 0, 'textformat': _v},
+    '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy input to the installation, i.e. bought from grid, or generated from Solar PV
 
     '/Ac/' + self._phase + '/Voltage': {'initial': 0, 'textformat': _v},
     '/Ac/' + self._phase + '/Current': {'initial': 0, 'textformat': _a},
     '/Ac/' + self._phase + '/Power': {'initial': 0, 'textformat': _w},
     '/Ac/' + self._phase + '/Energy/Forward': {'initial': None, 'textformat': _kwh},
-
-  
     }
     if (self._dbusservicename != 'pvinverter'):
-      self._paths['/Ac/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh} # energy output fro the installation, i.e. sold to the grid, or used to charge batteries etc.
+      logging.debug(f"Setting up Reverse Power for {self._dbusservicename}") 
+      self._paths['/Ac/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh} # energy output/taken from the installation, i.e. sold to the grid, or used to charge batteries, AC loads etc.
       self._paths['/Ac/' + self._phase + '/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh}
 
   def updateDbusValues(self, meter_data):
     # Old Send
-    power = meter_data['emeters'][self.channel]['power']
-    voltage = meter_data['emeters'][self.channel]['voltage']
-    energy_total = meter_data['emeters'][self.channel]['total'] / 1000
-    energy_total_returned = meter_data['emeters'][self.channel]['total_returned'] / 1000
-
-    self._dbusservice['/Ac/' + self._phase + '/Voltage'] = voltage
+    power = float(meter_data['emeters'][self.channel]['power'])
+    voltage = float(meter_data['emeters'][self.channel]['voltage'])
+    energy_total = float(meter_data['emeters'][self.channel]['total'] / 1000)
+    energy_total_returned = float(meter_data['emeters'][self.channel]['total_returned'] / 1000)
     
     if (voltage != 0):
       current = power / voltage
     else:
       current = 0
     
-
+    self._dbusservice['/Ac/' + self._phase + '/Voltage'] = voltage
     self._dbusservice['/Ac/' + self._phase + '/Current'] = current
     self._dbusservice['/Ac/' + self._phase + '/Power'] = power
     self._dbusservice['/Ac/' + self._phase + '/Energy/Forward'] = energy_total
@@ -269,7 +266,10 @@ class DbusShellyEMService:
       # Call update() on Shelly Channel(s) to update
       for channel in self._shellychannels:
         channel.updateDbusValues(meter_data)
-        
+
+        #update lastupdate vars
+      self._lastUpdate = time.time()  
+      
     except Exception as e:
       logging.critical('Error at %s', '_update', exc_info=e)
 
@@ -314,33 +314,6 @@ def main():
 
       if (numberofshellys > 1):
         pass
-        
-      # pvac_output = DbusShellyemService(
-      #   servicename='com.victronenergy.pvinverter',
-      #   paths={
-      #     '/Ac/Energy/Forward': {'initial': 0, 'textformat': _kwh}, # energy bought from the grid
-      #     '/Ac/Energy/Reverse': {'initial': 0, 'textformat': _kwh}, # energy sold to the grid
-      #     '/Ac/Power': {'initial': 0, 'textformat': _w},
-          
-      #     '/Ac/Current': {'initial': 0, 'textformat': _a},
-      #     '/Ac/Voltage': {'initial': 0, 'textformat': _v},
-          
-      #     '/Ac/L1/Voltage': {'initial': 0, 'textformat': _v},
-      #     #'/Ac/L2/Voltage': {'initial': 0, 'textformat': _v},
-      #     #'/Ac/L3/Voltage': {'initial': 0, 'textformat': _v},
-      #     '/Ac/L1/Current': {'initial': 0, 'textformat': _a},
-      #     #'/Ac/L2/Current': {'initial': 0, 'textformat': _a},
-      #     #'/Ac/L3/Current': {'initial': 0, 'textformat': _a},
-      #     '/Ac/L1/Power': {'initial': 0, 'textformat': _w},
-      #     #'/Ac/L2/Power': {'initial': 0, 'textformat': _w},
-      #     #'/Ac/L3/Power': {'initial': 0, 'textformat': _w},
-      #     '/Ac/L1/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L2/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L3/Energy/Forward': {'initial': 0, 'textformat': _kwh},
-      #     '/Ac/L1/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L2/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-      #     #'/Ac/L3/Energy/Reverse': {'initial': 0, 'textformat': _kwh},
-      #   })
      
       logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
       mainloop = gobject.MainLoop()
