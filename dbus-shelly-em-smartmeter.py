@@ -87,7 +87,7 @@ class ShellyEMChannel:
     self._dbusservice.add_path('/UpdateIndex', 0)
 
     if (self._dbusservicename == 'pvinverter'):  
-      self._dbusservice.add_path('/StatusCode', 0)
+      self._dbusservice.add_path('/StatusCode', 7)
     
     # add path values to dbus
     for path, settings in self._paths.items():
@@ -111,7 +111,7 @@ class ShellyEMChannel:
     '/Ac/' + self._phase + '/Voltage': {'initial': 0, 'textformat': _v},
     '/Ac/' + self._phase + '/Current': {'initial': 0, 'textformat': _a},
     '/Ac/' + self._phase + '/Power': {'initial': 0, 'textformat': _w},
-    '/Ac/' + self._phase + '/Energy/Forward': {'initial': None, 'textformat': _kwh},
+    '/Ac/' + self._phase + '/Energy/Forward': {'initial': 0, 'textformat': _kwh},
     }
     if (self._dbusservicename != 'pvinverter'):
       logging.debug(f"Setting up Reverse Power for {self._dbusservicename}") 
