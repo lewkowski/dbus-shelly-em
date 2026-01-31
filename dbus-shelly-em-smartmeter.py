@@ -214,8 +214,12 @@ class DbusShellyEMService:
   def _getShellySerial(self):
     meter_data = self._getShellyData()  
 
-    if not meter_data['mac']:
+    if meter_data is None:
+        raise ValueError(f"Failed to get data from Shelly EM at {self._hostname} - cannot retrieve serial number")
+    
+    if not meter_data.get('mac'):
         raise ValueError("Response does not contain 'mac' attribute")
+    
     serial = meter_data['mac']
 
     return serial
@@ -330,10 +334,14 @@ def main():
       ShellyEMServices = []
       # Create a list of our Shelly Service(s)
       for i in range(1, numberofshellys+1):
-        ShellyEMServices.append(DbusShellyEMService (config, shellynum = i))
+        try:
+          ShellyEMServices.append(DbusShellyEMService (config, shellynum = i))
+        except Exception as e:
+          logging.error(f"Failed to initialize Shelly EM {i}: {e}. Skipping this Shelly.")
+          continue
 
-      if (numberofshellys > 1):
-        pass
+      if len(ShellyEMServices) == 0:
+        raise ValueError("No Shelly EM services could be initialized")
      
       logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
       mainloop = gobject.MainLoop()
