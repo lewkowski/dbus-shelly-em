@@ -64,7 +64,11 @@ class ShellyEMChannel:
     logging.info(f"DEBUG: Dbus Call {dbuscallname}")
 
     # Connect to session bus whenever present, else use the system bus
-    self._dbusservice = VeDbusService(dbuscallname, dbusconnection())
+    try:
+      self._dbusservice = VeDbusService(dbuscallname, dbusconnection(), register=False)
+    except Exception as e:
+      logging.error(f"Failed to create dBus service {dbuscallname}: {e}")
+      raise
     logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
 
     # Create the management objects, as specified in the ccgx dbus-api document
@@ -93,6 +97,14 @@ class ShellyEMChannel:
     for path, settings in self._paths.items():
       self._dbusservice.add_path(
         path, settings['initial'], gettextcallback=settings['textformat'], writeable=True, onchangecallback=self._handlechangedvalue)
+    
+    # Register the service after all paths are added
+    try:
+      self._dbusservice.register()
+      logging.info(f"Successfully registered dBus service {channelsectionname}")
+    except Exception as e:
+      logging.error(f"Failed to register dBus service {channelsectionname}: {e}")
+      raise
     pass    
 
   def _setupPaths(self):
@@ -119,6 +131,11 @@ class ShellyEMChannel:
       self._paths['/Ac/' + self._phase + '/Energy/Reverse'] = {'initial': 0, 'textformat': _kwh}
 
   def updateDbusValues(self, meter_data):
+    # Check if meter_data is None (connection failed)
+    if meter_data is None:
+      logging.warning(f"No data from Shelly - skipping update for {self._shellysectionname} Ch{self.channel}")
+      return
+    
     # Old Send
     power = float(meter_data['emeters'][self.channel]['power'])
     voltage = float(meter_data['emeters'][self.channel]['voltage'])
@@ -225,7 +242,7 @@ class DbusShellyEMService:
 
     try:
       # Make HTTP request to Shelly EM
-      meter_r = requests.get(url = self._URL)
+      meter_r = requests.get(url = self._URL, timeout=5)
     
       # Check for response
       if not meter_r:
@@ -238,14 +255,12 @@ class DbusShellyEMService:
       if not meter_data:
         raise ValueError("Converting response to JSON failed")
       
-    except ConnectionError as e:
-      if 'No route to host' in str(e):
-        logging.info("No route to host -> Shelly EM at {self._hostname}")
-      else:
-        logging.info(f"An unexpected error occurred: {e}")
-
-    #except Exception as e:
-    #  logging.critical(f'Failed to connect to Shelly EM at {self._hostname}', exc_info=e)
+    except requests.exceptions.Timeout:
+      logging.warning(f"Timeout connecting to Shelly EM at {self._hostname}")
+    except requests.exceptions.ConnectionError as e:
+      logging.warning(f"Connection error to Shelly EM at {self._hostname}: {e}")
+    except Exception as e:
+      logging.warning(f"Error getting data from Shelly EM at {self._hostname}: {e}")
 
     return meter_data
  
@@ -263,6 +278,11 @@ class DbusShellyEMService:
       #get data from Shelly em
       meter_data = self._getShellyData()
       
+      # Only update if we got valid data
+      if meter_data is None:
+        logging.warning(f"Failed to get data from {self._shellysection}, will retry on next update")
+        return True
+      
       # Call update() on Shelly Channel(s) to update
       for channel in self._shellychannels:
         channel.updateDbusValues(meter_data)
@@ -271,7 +291,7 @@ class DbusShellyEMService:
       self._lastUpdate = time.time()  
       
     except Exception as e:
-      logging.critical('Error at %s', '_update', exc_info=e)
+      logging.error(f'Error updating {self._shellysection}: {e}')
 
     # return true, otherwise add_timeout will be removed from GObject - see docs http://library.isr.ist.utl.pt/docs/pygtk2reference/gobject-functions.html#function-gobject--timeout-add
     return True

@@ -3,16 +3,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SERVICE_NAME=$(basename $SCRIPT_DIR)
 
 # set permissions for script files
-chmod a+x $SCRIPT_DIR/restart.sh
 chmod 744 $SCRIPT_DIR/restart.sh
-
-chmod a+x $SCRIPT_DIR/uninstall.sh
 chmod 744 $SCRIPT_DIR/uninstall.sh
-
-chmod a+x $SCRIPT_DIR/service/run
 chmod 755 $SCRIPT_DIR/service/run
 
-# create sym-link to run script in deamon
+# create sym-link to run script in daemon (force recreate if exists)
+rm -f /service/$SERVICE_NAME
 ln -s $SCRIPT_DIR/service /service/$SERVICE_NAME
 
 # add install-script to rc.local to be ready for firmware update
